@@ -1,0 +1,407 @@
+---
+title: "Seleção de modelos para previsão do ipca mensal"
+author: "Daniel Alvarez"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+geometry: margin=1in
+fontfamily: calibri
+fontsize: 11pt
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+#Pacotes
+
+Serão utilizados os seguintes pacotes.
+```{r, echo=F,include=FALSE, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+library(tidyverse)
+library(scales)
+library(sidrar)
+library(ipeadatar)
+library(DT)
+library(tsibble)
+library(rbcb)
+library(forecast)
+library(gridExtra)
+library(xts)
+library(BETS)
+library(xtable)
+library(highcharter)
+#seasonal
+library(seasonal)
+Sys.setenv(X13_PATH = 'D:/Meus Documentos/Desktop/Mestrado/Análise Macro/x13as')
+```
+
+# Introdução
+
+A teoria econômica estabelece uma forte relação entre a inflação, no Brasil medida pelo IPCA, desemprego e a taxa basica de júros. Isto posto, propõe-se aqui selecionar um modelo capaz de predizer a variação mensal do IPCA e assim construir alguns cenários baseados na taxa de juros e no desemprego da economia brasileira nos proximos 12 meses.
+
+# IPCA
+O primeiro passo é a coleta e o tratamento dos dados, as três variáveis utilizadas aqui seram coletadas através dos pacotes rbcb, criado pelo Banco Central do Brasil e do Ipeadatar, criado pelo IPEA.
+Inicia-se entãõ, coletando a série do IPCA.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+ipca <- get_series(433, start_date = as.Date('01/03/2012',format = "%d/%m/%Y"))%>%
+mutate(date = yearmonth(date)) %>%
+  dplyr::rename(ipca = `433`) %>%
+as_tsibble(index=date)
+```
+
+O primeiro passo é tratar os dados para que sejam transformados em série temporal.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+inflacao_mensal = ts(ipca$ipca, start=c(2012,03), freq=12)
+
+```
+A primeira análise consiste na detecção de sazonalidade no IPCA. Mediante análise do gráfico nota-se um padrão sazonal bastante pronunciado. E isso será tratado através de dummies sazonais. 
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+ggmonthplot(inflacao_mensal)
+dummies <- seasonaldummy(inflacao_mensal)               
+
+```
+
+
+# SELIC
+Coleta dos dados da Selic
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+selic <- BETS::BETSget(4189, from ='2012-03-01', frequency = 12)
+
+```
+# Desemprego
+Para o desemprego, será usado a taxa de desocupação aferida pela PNAD contínua.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+#População desocupada (PNAD-C)
+des <- ipeadata("PAN12_TDESOC12")%>%
+  select(date,value)%>%
+  dplyr::rename(desemprego = value)
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+desemprego <- ts(des, start=c(2012,03), freq = 12)
+
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+desemprego_seas <- seas(desemprego[,2])
+desemprego  <- desemprego_seas$data[,3]
+```
+
+Diferente das outras variáveis apresentadas até aqui, precisamos tratar o desemprego de forma especial. A série é mais curta que as outras duas. Portanto, ao inves de descartar observações no IPCA e na SELIC, optou-se por fazer uma previsão do desemprego para julho/2021.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+desemprego.forecast <- forecast(auto.arima(desemprego,lambda = 0.5862068 ), h=1, level=95)$mean
+x <- data.frame(date = c("2021-07-01"), desemprego_seas= desemprego.forecast)
+desemprego.forecast <-as.xts(desemprego.forecast)
+desemprego2 <- as.xts(desemprego)
+des <- c(desemprego2, desemprego.forecast)
+```
+
+
+# Breve exploração das séries
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+g1<-autoplot(desemprego)+
+  geom_smooth()+
+  xlab("Ano")+ylab('Tx.Desocupação')+
+  ggtitle("Taxa de desocupação (%)")+
+  theme_bw()
+
+g2<-autoplot(inflacao_mensal)+
+  geom_smooth()+
+  xlab("Ano")+ylab('IPCA')+
+  ggtitle("IPCA mensal")+
+  theme_bw()
+
+g3<-autoplot(selic)+
+  geom_smooth()+
+  xlab("Ano")+ylab('SELIC')+
+  ggtitle("SELIC mensal")+
+  theme_bw()
+
+grid.arrange(g1, g2, g3)
+             
+```
+Nota-se um comportamento errático na série do ipca, aparentemente sem um componente de tendencia forte. No entanto, para ser possível observar um padrão de tendencia, seria necessário visualizar a séria acumulada nos ultimos 12 meses. Fica pra próxima rs.
+
+
+Aqui juntamos as três séries em uma uníca base de dados. 
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+data <- ts.intersect(inflacao_mensal,des,selic, dummies)
+```
+
+# Estimação
+
+Agora iniciamos a parte mais interessante. Não usaremos modelos univariados de séries temporais na presente análise. Vamos deixar as coisas mais interessantes ao incluir nos modelos variáveis exogenas (taxa de juros e desemprego). Mas, devemos começar pelo começo, e para isso devemos começar pela regressão linear.
+
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+lin1 <- tslm(ipca ~ data[,2:13], data = data)
+r1<-summary(lin1)
+print(xtable(r1), comment=FALSE)
+```
+Diferente do que era esperado, a selic não se mostrou estatisticamente significativa para determinar o ipca. Quando o resultado de um refressão segue o lado oposto ao da teoria, é sinal de que algo não está certo. Aqui, no caso, é porque não estamos usando a modelagem correta. Mas vamos dar proseguimento ao processo de forecast por razões didáticas.
+
+## Comparação entre o IPCA e o modelo estimado
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+autoplot(ts(fitted(lin1), start=c(2012,03), freq=12))+
+geom_line(size=1, aes(colour='LM'))+
+geom_line(aes(y=inflacao_mensal, colour='IPCA'), size=.7)+
+xlab('')+ylab('% a.m.')+
+labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+caption='Fonte: Elaborado pelo autor',
+colour='')+
+theme(legend.position="bottom")
+```
+
+Além de não estarmos utilizando o framework metodologico adequado, o com as variáveis que temos em mãos mal mal conseguimos simular as variações do ipca. Quem dirá prevê-las. Para tanto, adicionaremos o úmero índice da produção industrial e o cambio
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+cambio <-BETSget(3697, 
+                       from = "2012-03-01", frequency = 12)
+```
+
+Novamente nos deparamos com o problema de missing value. Desta vez, na série da industria. Para tanto, vamos adotar o mesmo procedimento adotado na construção da série do desemprego.
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+industria <- BETSget(21940, 
+                     from = "2012-03-01", frequency = 12)
+industria.forecast <- forecast(auto.arima(industria,lambda =BoxCox.lambda(industria) ), h=1, level=95)$mean
+y <- data.frame(date = c("2021-07-01"), industria = industria.forecast)
+industria.forecast <-as.xts(industria.forecast)
+industria2 <- as.xts(industria)
+industria <- c(industria2, industria.forecast)
+```
+
+Juntanto no mesmo objeto.
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+data2 <- ts.intersect(inflacao_mensal,des,selic, cambio, industria, dummies)
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+lin2 <- tslm(ipca ~ data2[,2:16], data2 = data)
+r2<-summary(lin2)
+print(xtable(r2), comment=FALSE)
+
+```
+Vamos examinar novamente o modelo vs. a série original.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+autoplot(ts(fitted(lin2), start=c(2012,03), freq=12))+
+geom_line(size=1, aes(colour='LM2'))+
+geom_line(aes(y=inflacao_mensal, colour='IPCA'), size=.7)+
+xlab('')+ylab('% a.m.')+
+labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+caption='Fonte: Elaborado pelo autor',
+colour='')+
+theme(legend.position="bottom")
+
+```
+
+Embora seja possível notar mais aderencia do modelo ajustado à serie original do ipca, percebe-se que é possível melhora muito. Para tanto, adotaremos o framework correto. Começaremos agora a estimar modelos dentro do escopo de séries temporais.
+Mas antes vamos interpretar os coeficientes:
+O desemprego, claramente contribui para a desaceleração do ipca. Tal como, um dolar mais caro contribui para o seu aumento.
+Chamam atenção o sinal positivo da selic, que deveria impactar negativamente na aceleração da inflação. Mas, devemos considerar o seguinte: estamos analisando a selic e o ipca no mesmo periodo de tempo t1. E, a taxa selic funciona como mecanismo de contenção para a inflação. Ou seja, é aumentada após a detecção de aceleração do ipca. Portanto, o aumento da selic em t1 só causará impacto negativo no ipca futuramente.
+Quanto ao sinal da produção industrial temos a seguinte hipótese: Estamos produzindo a custos crescentes, o que não é dificil de se eperar no Brasil.
+
+# Modelo Arima.
+O primeiro modelo, estimado, será o mais simples possível. Contaremos com a ajuda da função autorima para estimar um modelo univariado. Assim, não precisaremos análisar as funções de autocorrelação e autocorrelação parcial para definir a ordem do modelo. Vamos comparar o modelo estimado com a série original novamente.
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+arima1<-auto.arima(inflacao_mensal)
+
+
+comparacao_ts <- cbind(inflacao_mensal, fitted(arima1))
+autoplot(comparacao_ts)
+```
+Nota-se uma aderencia muito maior, mas vamos selecionar o modelo sob o qual criaremos cenários usando métricas objetivas a seguir. Antes, vamos brincar mais um pouco e estimar mais alguns modelos. Agora que estamos chegando ao caminho certo, vamos introduzir variáveis exogenas. Aqui vamos, basicamente, combinar o modelo arima com o modelo de regressão linear multípla. 
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+arima2 <- auto.arima(data2[,1], xreg = data2[,2:16])
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+autoplot(ts(fitted(arima2), start=c(2012,03), freq=12))+
+geom_line(size=1, aes(colour='Arima'))+
+geom_line(aes(y=inflacao_mensal, colour='IPCA'), size=.7)+
+xlab('')+ylab('% a.m.')+
+labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+caption='Fonte: Elaborado pelo autor',
+colour='')+
+theme(legend.position="bottom")
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+a1<-ggAcf(inflacao_mensal)
+a2<-ggPacf(inflacao_mensal)
+grid.arrange(a1, a2,
+            top = "Funções de Autocorrelação para a Inflação",
+            layout_matrix = matrix(c(1,1,2,2),
+                                  ncol=2, byrow=TRUE))
+```
+
+Baseado nas funções de ACF e PACF vamos ambandonar o modelo automatizado e vamos modelar do jeito roots! rs.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+arima3 <- Arima(data2[,1], xreg = data2[,2:16], order = c(1,0,0))
+```
+
+# Diagnóstico dos erros.
+
+Vamos aproveitar e examinar os residuos do nosso modelo.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+checkresiduals(arima3)
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+autoplot(ts(fitted(arima3), start=c(2012,03), freq=12))+
+geom_line(size=1, aes(colour='Arima'))+
+geom_line(aes(y=inflacao_mensal, colour='IPCA'), size=.7)+
+xlab('')+ylab('% a.m.')+
+labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+caption='Fonte: Elaborado pelo autor',
+colour='')+
+theme(legend.position="bottom")
+```
+ 
+ Podemos ver muito mais aderencia a série original. No entanto, o teste Ljung-Box test sugere que nosso erros são correlacionados. Por isso vamos tentar uma abordagem diferente e modelar a sazonalidade.
+ 
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+data2 <- ts.intersect(inflacao_mensal,des,selic, cambio,industria)
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+arima4 <- Arima(data2[,1], xreg = data2[,2:5], order = c(1,0,0), seasonal = c(1,0,0) )
+```
+
+```{r, echo=F, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+checkresiduals(arima4)
+```
+Bom, conseguimos enxergar que os erros seguem uma distribuição normal e se assemelham a um ruído branco e aceitamos a hiótese nula de que os erros não são correlacionados. Acredito que tenhamos um forte candidato em mãos.
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+autoplot(ts(fitted(arima4), start=c(2012,03), freq=12))+
+geom_line(size=1, aes(colour='Arima'))+
+geom_line(aes(y=inflacao_mensal, colour='IPCA'), size=.7)+
+xlab('')+ylab('% a.m.')+
+labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+caption='Fonte: Elaborado pelo autor',
+colour='')+
+theme(legend.position="bottom")
+```
+
+Vamos tentar um modelo menos parcimonioso agora
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+arima5 <- Arima(data2[,1], xreg = data2[,2:5], order = c(3,1,1), seasonal = c(1,0,0) )
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+checkresiduals(arima5)
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+autoplot(ts(fitted(arima5), start=c(2012,03), freq=12))+
+geom_line(size=1, aes(colour='Arima'))+
+geom_line(aes(y=inflacao_mensal, colour='IPCA'), size=.7)+
+xlab('')+ylab('% a.m.')+
+labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+caption='Fonte: Elaborado pelo autor',
+colour='')+
+theme(legend.position="bottom")
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+arima6 <- Arima(data2[,1], xreg = data2[,2:5], order = c(12,1,1), seasonal = c(1,0,0) )
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+checkresiduals(arima6)
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+autoplot(ts(fitted(arima6), start=c(2012,03), freq=12))+
+geom_line(size=1, aes(colour='Arima'))+
+geom_line(aes(y=inflacao_mensal, colour='IPCA'), size=.7)+
+xlab('')+ylab('% a.m.')+
+labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+caption='Fonte: Elaborado pelo autor',
+colour='')+
+theme(legend.position="bottom")
+```
+
+# Selecionar o melhor modelo
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+
+acc1 = accuracy(arima1,  test = inflacao_mensal)
+acc2 = accuracy(arima2,  test = inflacao_mensal)
+acc3 = accuracy(arima3,  test = inflacao_mensal)
+acc4 = accuracy(arima4,  test = inflacao_mensal)
+acc5 = accuracy(arima5,  test = inflacao_mensal)
+acc6 = accuracy(arima6,  test = inflacao_mensal)
+
+```
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+print(xtable(acc1), comment=FALSE, type = "latex")
+print(xtable(acc2), comment=FALSE, type = "latex")
+print(xtable(acc4), comment=FALSE, type = "latex")
+print(xtable(acc5), comment=FALSE, type = "latex")
+print(xtable(acc6), comment=FALSE, type = "latex")
+
+```
+
+\newpage
+# Fazendo a projeção do IPCA
+Vamos selecionar o modelo base no RMSE. Para ser mais exato vamos escolher o modelo com o menor RMSE.
+A grande questão aqui é que os modelos arima5 e arima6 possuem um RMSE muito pequeno. Dessa forma, vamos selecionar o modelo mais parcimonioso. Ou seja, vamos construir cenários com base no modelo arima5.
+
+Como se trata da criação de um cenário, precisamos, obviamente, criar um cenário. Aqui é onde colocamos a imaginação para funcionar. 
+
+Por se tratar de um exercício informal, podemos adotar as premissas que quisermos. No entanto, no ambiente profissional, esse processo é de grande importância. Para tanto, um bom método de definição de premissas é o método delfi. Para mais informações dá um google aí.
+
+Assim, a seguir criamos a matriz de cenários com base nas seguites premissas:
+1 - Queda na taxa de desemprego
+2 - Selic chegando a  7,5 pp
+3 - Cambio a 5,20
+4 - Indice de produção industrial mantendo-se em cerca de 90 pontos;
+
+
+```{r, echo=T, eval=T, results='asis', fig.width=8, fig.height=4, fig.align='center', out.width="1\\linewidth", warning=FALSE, message=FALSE, size='small'}
+c1 <- data.frame(des=c(13,12.5,11,10,9,9.75,9.5,9.25,9.125,9,8.5,7),
+                 selic = c(5.01,5.15,5.25,5.5,6,7,7,7,7,7,7,7),
+                 cambio = c(5.2511,5.22,5.10,5.15,5.20,5.20,5.20,5.20,5.20,5.20,5.20,5.20),
+                 industria = c(89,90,90,90,89,88,89,91,92,89,90,87))
+c1<- as.matrix(c1)
+```
+
+
+```{r}
+f_arima <- forecast(arima5, xreg = c1, h = 12)
+
+```
+
+```{r}
+autoplot(f_arima)+
+  xlab("Período") + ylab("IPCA")+
+  labs(title='Inflação mensal vs. Modelo de Regressão Múltipla',
+  caption='Fonte: Elaborado pelo autor',
+colour='')
+theme(legend.position="bottom")
+  
+```
+
+
+```{r}
+f_arima$mean
+```
+
+
+
